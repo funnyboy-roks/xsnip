@@ -47,6 +47,7 @@ uint8_t* keymap;
 
 // Set to config setting as default but can be override with -o or -t
 bool opaque_mode = OPAQUE;	
+char *outfile = NULL;
 
 int32_t exit_clean(char* err) {	
 	if(img) XDestroyImage(img);
@@ -72,14 +73,14 @@ int32_t exit_clean(char* err) {
 int32_t create_filename(bool save, char** ts) {
 	time_t cur = time(NULL);
 
-	if(save) {
+	if (save) {
 		const char* home;
 		if((home = getenv("HOME")) == NULL) {
 			home = getpwuid(getuid())->pw_dir;
 		}
 
-		// 29 = ctime-4 + .png + \0
-		uint32_t tsize = strlen(home) + strlen(SAVEDIR) + 29;		
+		// 29 = datetime + .png + \0
+		uint32_t tsize = strlen(home) + strlen(SAVEDIR) + 31;
 		*ts = malloc(sizeof(char) * tsize);
 		if(!*ts) 
 			return exit_clean("Could not allocate filename\n");
@@ -87,17 +88,19 @@ int32_t create_filename(bool save, char** ts) {
 		strncpy(*ts, home, strlen(home));
 		strncat(*ts, SAVEDIR, strlen(SAVEDIR)+1);
 	} else {
-		// 34 = ctime-4 + /tmp/ + .png + \0
-		*ts = malloc(sizeof(char) * 34);
+		// 34 = datetime + /tmp/ + .png + \0
+		*ts = malloc(sizeof(char) * 36);
 		if(!*ts) 
 			return exit_clean("Could not allocate filename\n");
 		strncpy(*ts, "/tmp/", 6);
 	}
 
-	// intentionally cut off the last 4 bytes of ctime() 
-	strncat(*ts, ctime(&cur), 24);
-
-	strncat(*ts, ".png", 6);
+    struct tm *t = localtime(&cur);
+    snprintf(*ts + strlen(*ts), 30,
+        "xsnip_%04d-%02d-%02d_%02d:%02d:%02d.png",
+        t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+        t->tm_hour,        t->tm_min,     t->tm_sec
+    );
 
 	return 0;
 }
@@ -144,15 +147,46 @@ int32_t create_png(uint8_t* buffer, uint32_t width, uint32_t height, bool save, 
 	return 0;	
 }
 
+#if OPAQUE == true
+#define OPAQUE_SWITCH "t"
+#else  // OPAQUE
+#define OPAQUE_SWITCH "o"
+#endif // OPAQUE
+
 int main(int argc, char** argv) {
-	// Primitive but really all that's needed
-	// TODO add help command and handle this better
-	if(argc > 1) {
-		if(!strcmp(argv[1], "-o"))
-			opaque_mode = true;
-		else if(!strcmp(argv[1], "-t"))
-			opaque_mode = false;	
-	}
+    int opt;
+    while ((opt = getopt(argc, argv, OPAQUE_SWITCH"f:h")) != -1) {
+        switch (opt) {
+            case 'o':
+                opaque_mode = true;
+                break;
+            case 't':
+                opaque_mode = false;	
+                break;
+            case 'f':
+                outfile = strdup(optarg);
+                break;
+            case 'h':
+                fprintf(stderr, "Usage: %s [-"OPAQUE_SWITCH"] [-f output_file]\n", argv[0]);
+#if OPAQUE == true
+                fprintf(stderr, "    -t                 Enable transparent mode\n");
+#else  // OPAQUE
+                fprintf(stderr, "    -o                 Enable opaque mode\n");
+#endif // OPAQUE
+                fprintf(stderr, "    -f <output_file>   Set a custom output file\n");
+                exit(EXIT_SUCCESS);
+            default:
+                fprintf(stderr, "Usage: %s [-"OPAQUE_SWITCH"] [-f output_file]\n", argv[0]);
+                exit(EXIT_FAILURE);
+        }
+    }
+
+    if (optind < argc) {
+        fprintf(stderr, "Unexpected argument: %s\n", argv[optind]);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("output file = %s\n", outfile);
 
 	display = XOpenDisplay(NULL);
 	if(!display) 
@@ -378,7 +412,11 @@ int main(int argc, char** argv) {
 		} 
 	}
 
-	create_filename(save, &fpath);
+    if (outfile == NULL) {
+        create_filename(save, &fpath);
+    } else {
+        fpath = outfile;
+    }
 
 	int32_t png = create_png(buffer, width, height, save, fpath); 
 	if(png != 0) return png;
